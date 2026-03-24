@@ -1,0 +1,224 @@
+openapi: 3.0.3
+info:
+  title: Kintsugi Storage API
+  version: 1.0.0
+  description: >
+    HTTP API for an in-memory JSON object storage service with TTL, persistence,
+    health probes, and Prometheus metrics.
+
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: objects
+    description: JSON object storage operations
+  - name: probes
+    description: Liveness and readiness probes
+  - name: metrics
+    description: Prometheus metrics endpoint
+
+paths:
+  /objects/{key}:
+    put:
+      tags:
+        - objects
+      summary: Store or overwrite a JSON object
+      description: >
+        Stores a JSON object by key. If the key already exists, the object is overwritten.
+        The optional Expires header defines the absolute expiration time in RFC1123 format.
+      operationId: putObject
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: Object key
+          schema:
+            type: string
+        - name: Expires
+          in: header
+          required: false
+          description: >
+            Absolute expiration time in RFC1123 format, for example
+            `Sun, 22 Mar 2026 23:45:11 UTC`.
+          schema:
+            type: string
+            example: Sun, 22 Mar 2026 23:45:11 UTC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              sample:
+                value:
+                  name: alice
+                  age: 30
+      responses:
+        '201':
+          description: Object stored successfully
+        '400':
+          description: Invalid key, invalid JSON, invalid Expires header, or expiration time in the past
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_json:
+                  value:
+                    error: request body must be valid JSON
+                invalid_expires:
+                  value:
+                    error: invalid Expires header
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - objects
+      summary: Retrieve a JSON object by key
+      description: >
+        Returns the stored JSON object if it exists and has not expired.
+      operationId: getObject
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: Object key
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Object found
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                sample:
+                  value:
+                    name: alice
+                    age: 30
+        '400':
+          description: Invalid key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Object not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_found:
+                  value:
+                    error: object not found
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /probes/liveness:
+    get:
+      tags:
+        - probes
+      summary: Liveness probe
+      description: Returns process liveness status.
+      operationId: getLiveness
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              examples:
+                alive:
+                  value:
+                    status: ok
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /probes/readiness:
+    get:
+      tags:
+        - probes
+      summary: Readiness probe
+      description: Returns whether the service is ready to serve requests.
+      operationId: getReadiness
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              examples:
+                ready:
+                  value:
+                    status: ready
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_ready:
+                  value:
+                    error: service is not ready
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /metrics:
+    get:
+      tags:
+        - metrics
+      summary: Prometheus metrics
+      description: Returns metrics in Prometheus exposition format.
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Metrics returned successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: object not found
+
+    StatusResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: ok

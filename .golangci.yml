@@ -1,0 +1,28 @@
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - revive
+    - staticcheck
+    - unused
+
+linters-settings:
+  revive:
+    ignore-generated-header: true
+    rules:
+      - name: exported
+        disabled: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

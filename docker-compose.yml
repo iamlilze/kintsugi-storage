@@ -1,0 +1,13 @@
+services:
+  kintsugi-storage:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    container_name: kintsugi-storage
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
