@@ -2,15 +2,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
-// errorResponse - минимальный единый формат ошибок API.
 type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// writeJSON пишет JSON-ответ с заданным статусом.
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -19,12 +18,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 		return
 	}
 
-	_ = json.NewEncoder(w).Encode(value) // Кодируем ответ в JSON; ошибку здесь обычно уже некуда осмысленно вернуть.
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		slog.Default().Error("failed to encode json response", "error", err)
+	}
 }
 
-// writeError пишет JSON-ошибку в едином формате.
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{
-		Error: message,
-	})
+	writeJSON(w, status, errorResponse{Error: message})
 }

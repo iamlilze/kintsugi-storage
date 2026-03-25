@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -8,130 +9,175 @@ import (
 	"time"
 )
 
-// Config хранит весь runtime-конфиг приложения.
 type Config struct {
 	HTTPAddr         string
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	ShutdownTimeout  time.Duration
+	MaxBodyBytes     int64
 	SnapshotPath     string
 	CleanupInterval  time.Duration
 	SnapshotInterval time.Duration
-	ShutdownTimeout  time.Duration
-	MaxBodyBytes     int64
 	LogLevel         string
 	LogFormat        string
 }
 
-// Config хранит весь runtime-конфиг приложения.
-func MustLoad() (Config, error) {
+func Load() (Config, error) {
+	var errs []error
+
+	httpAddr := getEnv("HTTP_ADDR", ":8080")
+
+	readTimeout, err := getEnvDuration("READ_TIMEOUT", 10*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	writeTimeout, err := getEnvDuration("WRITE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	idleTimeout, err := getEnvDuration("IDLE_TIMEOUT", 120*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	shutdownTimeout, err := getEnvDuration("SHUTDOWN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	maxBodyBytes, err := getEnvInt64("MAX_BODY_BYTES", 1<<20)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	snapshotPath := getEnv("SNAPSHOT_PATH", "./data/snapshot.json")
+
+	cleanupInterval, err := getEnvDuration("CLEANUP_INTERVAL", 5*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	snapshotInterval, err := getEnvDuration("SNAPSHOT_INTERVAL", 30*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	logLevel := getEnv("LOG_LEVEL", "info")
+	logFormat := getEnv("LOG_FORMAT", "text")
+
 	cfg := Config{
-		HTTPAddr:         getEnv("HTTP_ADDR", ":8080"),
-		SnapshotPath:     getEnv("SNAPSHOT_PATH", "./data/snapshot.json"),
-		CleanupInterval:  getEnvDuration("CLEANUP_INTERVAL", 5*time.Second),
-		SnapshotInterval: getEnvDuration("SNAPSHOT_INTERVAL", 30*time.Second),
-		ShutdownTimeout:  getEnvDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
-		MaxBodyBytes:     getEnvInt64("MAX_BODY_BYTES", 1<<20),
-		LogLevel:         getEnv("LOG_LEVEL", "info"),
-		LogFormat:        getEnv("LOG_FORMAT", "text"),
+		HTTPAddr:         httpAddr,
+		ReadTimeout:      readTimeout,
+		WriteTimeout:     writeTimeout,
+		IdleTimeout:      idleTimeout,
+		ShutdownTimeout:  shutdownTimeout,
+		MaxBodyBytes:     maxBodyBytes,
+		SnapshotPath:     snapshotPath,
+		CleanupInterval:  cleanupInterval,
+		SnapshotInterval: snapshotInterval,
+		LogLevel:         logLevel,
+		LogFormat:        logFormat,
 	}
 
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+	if vErr := cfg.validate(); vErr != nil {
+		errs = append(errs, vErr)
 	}
 
+	if len(errs) > 0 {
+		return Config{}, errors.Join(errs...)
+	}
 	return cfg, nil
 }
 
-// Validate проверяет, что конфиг содержит осмысленные значения.
-func (c Config) Validate() error {
+func (c Config) validate() error {
+	var errs []error
+
 	if strings.TrimSpace(c.HTTPAddr) == "" {
-		return fmt.Errorf("config: HTTP_ADDR must not be empty")
+		errs = append(errs, fmt.Errorf("config: HTTP_ADDR must not be empty"))
 	}
-
 	if strings.TrimSpace(c.SnapshotPath) == "" {
-		return fmt.Errorf("config: SNAPSHOT_PATH must not be empty")
+		errs = append(errs, fmt.Errorf("config: SNAPSHOT_PATH must not be empty"))
 	}
-
 	if c.CleanupInterval <= 0 {
-		return fmt.Errorf("config: CLEANUP_INTERVAL must be greater than zero")
+		errs = append(errs, fmt.Errorf("config: CLEANUP_INTERVAL must be positive"))
 	}
-
 	if c.SnapshotInterval < 0 {
-		return fmt.Errorf("config: SNAPSHOT_INTERVAL must be greater than or equal to zero")
+		errs = append(errs, fmt.Errorf("config: SNAPSHOT_INTERVAL must be >= 0"))
 	}
-
 	if c.ShutdownTimeout <= 0 {
-		return fmt.Errorf("config: SHUTDOWN_TIMEOUT must be greater than zero")
+		errs = append(errs, fmt.Errorf("config: SHUTDOWN_TIMEOUT must be positive"))
 	}
-
+	if c.ReadTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("config: READ_TIMEOUT must be positive"))
+	}
+	if c.WriteTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("config: WRITE_TIMEOUT must be positive"))
+	}
+	if c.IdleTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("config: IDLE_TIMEOUT must be positive"))
+	}
 	if c.MaxBodyBytes <= 0 {
-		return fmt.Errorf("config: MAX_BODY_BYTES must be greater than zero")
+		errs = append(errs, fmt.Errorf("config: MAX_BODY_BYTES must be positive"))
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
 	case "debug", "info", "warn", "error":
 	default:
-		return fmt.Errorf("config: LOG_LEVEL must be one of debug, info, warn, error")
+		errs = append(errs, fmt.Errorf("config: LOG_LEVEL must be one of debug, info, warn, error"))
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.LogFormat)) {
 	case "text", "json":
 	default:
-		return fmt.Errorf("config: LOG_FORMAT must be one of text, json")
+		errs = append(errs, fmt.Errorf("config: LOG_FORMAT must be one of text, json"))
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
-// getEnv читает строковую переменную окружения с дефолтным значением.
 func getEnv(key, fallback string) string {
 	value, ok := os.LookupEnv(key)
 	if !ok {
 		return fallback
 	}
-
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return fallback
 	}
-
 	return value
 }
 
-// getEnvDuration читает duration из env или возвращает fallback.
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
+func getEnvDuration(key string, fallback time.Duration) (time.Duration, error) {
 	raw, ok := os.LookupEnv(key)
 	if !ok {
-		return fallback
+		return fallback, nil
 	}
-
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
-
-	value, err := time.ParseDuration(raw) // Парсим duration вида 5s, 1m, 250ms.
+	value, err := time.ParseDuration(raw)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("config: %s: invalid duration %q: %w", key, raw, err)
 	}
-
-	return value
+	return value, nil
 }
 
-// getEnvInt64 читает int64 из env или возвращает fallback.
-func getEnvInt64(key string, fallback int64) int64 {
+func getEnvInt64(key string, fallback int64) (int64, error) {
 	raw, ok := os.LookupEnv(key)
 	if !ok {
-		return fallback
+		return fallback, nil
 	}
-
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
-
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("config: %s: invalid integer %q: %w", key, raw, err)
 	}
-
-	return value
+	return value, nil
 }

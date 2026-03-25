@@ -1,59 +1,46 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync/atomic"
-	"time"
 
 	"kintsugi-storage/internal/config"
 	"kintsugi-storage/internal/httpapi"
+	"kintsugi-storage/internal/httpapi/middleware"
 	"kintsugi-storage/internal/observability"
-	"kintsugi-storage/internal/persistence"
 	"kintsugi-storage/internal/storage"
+	"kintsugi-storage/internal/storage/memory"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// readinessState хранит флаг готовности приложения к обслуживанию трафика.
-type readinessState struct {
-	ready atomic.Bool
-}
-
-// IsReady возвращает текущее состояние readiness.
-func (r *readinessState) IsReady() bool {
-	return r.ready.Load()
-}
-
-// SetReady обновляет readiness flag.
-func (r *readinessState) SetReady(value bool) {
-	r.ready.Store(value)
-}
-
-// App хранит все long-lived зависимости приложения.
 type App struct {
-	cfg         config.Config
-	logger      *slog.Logger
-	metrics     *observability.Metrics
-	store       *storage.MemoryStore
-	snapshotter *persistence.FileSnapshotter
-	ttlWorker   *storage.TTLWorker
-	server      *http.Server
-	readiness   *readinessState
+	cfg       config.Config
+	logger    *slog.Logger
+	accessLog *slog.Logger
+	metrics   *observability.Metrics
+	store     storage.Store
+	server    *http.Server
+	readiness *CompositeReadiness
+
+	// memory-specific (nil для других бэкендов)
+	memStore    *memory.Store
+	eviction    *memory.EvictionWorker
+	snapshotter *memory.FileSnapshotter
 }
 
-// New собирает приложение и все его зависимости.
 func New(cfg config.Config) (*App, error) {
-	// logger
-	logger := observability.NewLogger(observability.LoggerConfig{
+	logCfg := observability.LoggerConfig{
 		Level:  cfg.LogLevel,
 		Format: cfg.LogFormat,
-	})
+	}
+	logger := observability.NewLogger(logCfg)
+	accessLog := observability.NewAccessLogger(logCfg)
 
-	// metrics
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),
@@ -61,83 +48,61 @@ func New(cfg config.Config) (*App, error) {
 	)
 	metrics := observability.NewMetrics(registry)
 
-	// store
-	store := storage.NewMemoryStore()
-	// snapshotter
-	snapshotter := persistence.NewFileSnapshotter(cfg.SnapshotPath)
-	// snapshot
+	memStore := memory.New()
+	var store storage.Store = memStore
+
+	snapshotter := memory.NewFileSnapshotter(cfg.SnapshotPath)
 	snapshot, err := snapshotter.Load()
 	if err != nil {
 		return nil, fmt.Errorf("app: load snapshot: %w", err)
 	}
-
-	// restore snapshot
-	if err := store.Restore(snapshot, timeNow()); err != nil {
+	if err := memStore.Restore(snapshot); err != nil {
 		return nil, fmt.Errorf("app: restore snapshot: %w", err)
 	}
 
-	metrics.SetObjectsTotal(store.Len(timeNow()))
+	n, _ := store.Len(context.Background())
+	metrics.SetObjectsTotal(n)
 
-	readiness := &readinessState{}
-	readiness.SetReady(false)
+	eviction := memory.NewEvictionWorker(memStore, cfg.CleanupInterval, logger, metrics)
 
-	// objects handler
-	objectsHandler := httpapi.NewObjectsHandler(
-		store,
-		logger,
-		metrics,
-		cfg.MaxBodyBytes,
-	)
+	readiness := &CompositeReadiness{}
+	readiness.AddCheck("store", store.Ping)
 
-	// probes handler
-	probesHandler := httpapi.NewProbesHandler(
-		readiness,
-		logger,
-	)
+	objectsHandler := httpapi.NewObjectsHandler(store, logger, metrics, cfg.MaxBodyBytes)
+	probesHandler := httpapi.NewProbesHandler(readiness, logger)
 
-	// router
 	router := httpapi.NewRouter(httpapi.RouterDependencies{
 		Objects: objectsHandler,
 		Probes:  probesHandler,
 		Metrics: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 	})
 
-	// chain middleware
-	handler := httpapi.Chain(
+	handler := middleware.Chain(
 		router,
-		httpapi.RecoveryMiddleware(logger),
-		httpapi.RequestLoggingMiddleware(logger),
+		middleware.Recovery(logger),
+		middleware.Logging(accessLog),
+		middleware.RequestID,
 	)
 
-	// server
 	server := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: handler,
+		Addr:              cfg.HTTPAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.ReadTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
 	}
-
-	// ttl worker
-	ttlWorker := storage.NewTTLWorker(
-		store,
-		cfg.CleanupInterval,
-		logger,
-		metrics,
-	)
-
-	readiness.SetReady(true)
 
 	return &App{
 		cfg:         cfg,
 		logger:      logger,
+		accessLog:   accessLog,
 		metrics:     metrics,
 		store:       store,
-		snapshotter: snapshotter,
-		ttlWorker:   ttlWorker,
 		server:      server,
 		readiness:   readiness,
+		memStore:    memStore,
+		eviction:    eviction,
+		snapshotter: snapshotter,
 	}, nil
-}
-
-// timeNow вынесен в отдельную функцию, чтобы позже при необходимости упростить тестирование.
-func timeNow() time.Time {
-	return time.Now()
 }

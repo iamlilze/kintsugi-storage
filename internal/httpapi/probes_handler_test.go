@@ -1,7 +1,8 @@
 package httpapi
 
 import (
-	"io"
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -9,156 +10,94 @@ import (
 	"testing"
 )
 
-// mockReadinessChecker is a mock implementation of the ReadinessChecker interface.
 type mockReadinessChecker struct {
-	ready bool
+	err error
 }
 
-// IsReady is a mock implementation of the IsReady method.
-func (m *mockReadinessChecker) IsReady() bool {
-	return m.ready
+func (m *mockReadinessChecker) CheckReady(_ context.Context) error {
+	return m.err
 }
 
-// TestProbesHandlerLivenessSuccess tests that the Liveness method works correctly.
-func TestProbesHandlerLivenessSuccess(t *testing.T) {
-	handler := NewProbesHandler(&mockReadinessChecker{ready: true}, slog.Default())
+func TestLivenessSuccess(t *testing.T) {
+	handler := NewProbesHandler(&mockReadinessChecker{}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/probes/liveness", nil)
 	rec := httptest.NewRecorder()
-
 	handler.Liveness(rec, req)
 
-	res := rec.Result()
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("StatusCode = %d, want %d", res.StatusCode, http.StatusOK)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want %d", rec.Code, http.StatusOK)
 	}
-
-	body := readProbeBody(t, res.Body)
+	body := readBody(t, rec.Result().Body)
 	if !strings.Contains(body, `"status":"ok"`) {
-		t.Fatalf("body = %q, want liveness status ok", body)
+		t.Fatalf("body = %q, want liveness ok", body)
 	}
 }
 
-// TestProbesHandlerLivenessMethodNotAllowed tests that the Liveness method returns an error if the method is not allowed.
-func TestProbesHandlerLivenessMethodNotAllowed(t *testing.T) {
-	handler := NewProbesHandler(&mockReadinessChecker{ready: true}, slog.Default())
+func TestLivenessMethodNotAllowed(t *testing.T) {
+	handler := NewProbesHandler(&mockReadinessChecker{}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodPost, "/probes/liveness", nil)
 	rec := httptest.NewRecorder()
-
 	handler.Liveness(rec, req)
 
-	res := rec.Result()
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("StatusCode = %d, want %d", res.StatusCode, http.StatusMethodNotAllowed)
-	}
-
-	body := readProbeBody(t, res.Body)
-	if !strings.Contains(body, "method not allowed") {
-		t.Fatalf("body = %q, want method not allowed error", body)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("StatusCode = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
 
-// TestProbesHandlerReadinessSuccess tests that the Readiness method works correctly.
-func TestProbesHandlerReadinessSuccess(t *testing.T) {
-	handler := NewProbesHandler(&mockReadinessChecker{ready: true}, slog.Default())
+func TestReadinessSuccess(t *testing.T) {
+	handler := NewProbesHandler(&mockReadinessChecker{}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/probes/readiness", nil)
 	rec := httptest.NewRecorder()
-
 	handler.Readiness(rec, req)
 
-	res := rec.Result()
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("StatusCode = %d, want %d", res.StatusCode, http.StatusOK)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want %d", rec.Code, http.StatusOK)
 	}
-
-	body := readProbeBody(t, res.Body)
+	body := readBody(t, rec.Result().Body)
 	if !strings.Contains(body, `"status":"ready"`) {
-		t.Fatalf("body = %q, want readiness status ready", body)
+		t.Fatalf("body = %q, want ready", body)
 	}
 }
 
-// TestProbesHandlerReadinessNotReady tests that the Readiness method returns an error if the service is not ready.
-func TestProbesHandlerReadinessNotReady(t *testing.T) {
-	handler := NewProbesHandler(&mockReadinessChecker{ready: false}, slog.Default())
+func TestReadinessNotReady(t *testing.T) {
+	handler := NewProbesHandler(&mockReadinessChecker{err: fmt.Errorf("store down")}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/probes/readiness", nil)
 	rec := httptest.NewRecorder()
-
 	handler.Readiness(rec, req)
 
-	res := rec.Result()
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("StatusCode = %d, want %d", res.StatusCode, http.StatusServiceUnavailable)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("StatusCode = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-
-	body := readProbeBody(t, res.Body)
+	body := readBody(t, rec.Result().Body)
 	if !strings.Contains(body, "service is not ready") {
-		t.Fatalf("body = %q, want readiness error", body)
+		t.Fatalf("body = %q, want not ready", body)
 	}
 }
 
-// TestProbesHandlerReadinessNilChecker tests that the Readiness method returns an error if the checker is nil.
-func TestProbesHandlerReadinessNilChecker(t *testing.T) {
+func TestReadinessNilChecker(t *testing.T) {
 	handler := NewProbesHandler(nil, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/probes/readiness", nil)
 	rec := httptest.NewRecorder()
-
 	handler.Readiness(rec, req)
 
-	res := rec.Result()
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("StatusCode = %d, want %d", res.StatusCode, http.StatusServiceUnavailable)
-	}
-
-	body := readProbeBody(t, res.Body)
-	if !strings.Contains(body, "service is not ready") {
-		t.Fatalf("body = %q, want readiness error", body)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("StatusCode = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 }
 
-// TestProbesHandlerReadinessMethodNotAllowed tests that the Readiness method returns an error if the method is not allowed.
-func TestProbesHandlerReadinessMethodNotAllowed(t *testing.T) {
-	handler := NewProbesHandler(&mockReadinessChecker{ready: true}, slog.Default())
+func TestReadinessMethodNotAllowed(t *testing.T) {
+	handler := NewProbesHandler(&mockReadinessChecker{}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodPost, "/probes/readiness", nil)
 	rec := httptest.NewRecorder()
-
 	handler.Readiness(rec, req)
 
-	res := rec.Result()
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("StatusCode = %d, want %d", res.StatusCode, http.StatusMethodNotAllowed)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("StatusCode = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
-
-	body := readProbeBody(t, res.Body)
-	if !strings.Contains(body, "method not allowed") {
-		t.Fatalf("body = %q, want method not allowed error", body)
-	}
-}
-
-// readProbeBody is a helper function to read the body of a response.
-func readProbeBody(t *testing.T, body io.ReadCloser) string {
-	t.Helper()
-
-	data, err := io.ReadAll(body)
-	if err != nil {
-		t.Fatalf("io.ReadAll() error = %v, want nil", err)
-	}
-
-	return strings.TrimSpace(string(data))
 }

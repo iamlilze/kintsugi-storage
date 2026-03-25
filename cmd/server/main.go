@@ -18,9 +18,8 @@ func main() {
 	}
 }
 
-// run собирает конфиг, приложение и запускает его.
 func run() error {
-	cfg, err := config.MustLoad()
+	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

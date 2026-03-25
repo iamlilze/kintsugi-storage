@@ -4,19 +4,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics хранит все прикладные метрики сервиса.
 type Metrics struct {
-	putRequests       prometheus.Counter   // Счетчик PUT-запросов.
-	getRequests       prometheus.Counter   // Счетчик GET-запросов.
-	hits              prometheus.Counter   // Счетчик успешных чтений.
-	misses            prometheus.Counter   // Счетчик неуспешных чтений.
-	expiredDeletions  prometheus.Counter   // Счетчик объектов, удаленных TTL cleanup'ом.
-	objectsTotal      prometheus.Gauge     // Текущее число живых объектов в storage.
-	snapshotDuration  prometheus.Histogram // Длительность сохранения snapshot.
-	snapshotSizeBytes prometheus.Gauge     // Размер последнего snapshot в байтах.
+	putRequests       prometheus.Counter
+	getRequests       prometheus.Counter
+	hits              prometheus.Counter
+	misses            prometheus.Counter
+	expiredDeletions  prometheus.Counter
+	objectsTotal      prometheus.Gauge
+	snapshotDuration  prometheus.Histogram
+	snapshotSizeBytes prometheus.Gauge
 }
 
-// NewMetrics создает набор метрик и регистрирует их в переданном registry.
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	if reg == nil {
 		reg = prometheus.DefaultRegisterer
@@ -45,7 +43,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}),
 		objectsTotal: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "storage_objects_total",
-			Help: "Current number of non-expired objects stored in memory.",
+			Help: "Current number of non-expired objects stored.",
 		}),
 		snapshotDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "storage_snapshot_duration_seconds",
@@ -68,78 +66,28 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.snapshotDuration,
 		m.snapshotSizeBytes,
 	)
-
 	return m
 }
 
-// IncPutRequests увеличивает счетчик PUT-запросов.
-func (m *Metrics) IncPutRequests() {
-	if m == nil {
-		return
-	}
+func (m *Metrics) IncPutRequests() { m.putRequests.Inc() }
+func (m *Metrics) IncGetRequests() { m.getRequests.Inc() }
+func (m *Metrics) IncHits()        { m.hits.Inc() }
+func (m *Metrics) IncMisses()      { m.misses.Inc() }
 
-	m.putRequests.Inc()
-}
-
-// IncGetRequests увеличивает счетчик GET-запросов.
-func (m *Metrics) IncGetRequests() {
-	if m == nil {
-		return
-	}
-
-	m.getRequests.Inc()
-}
-
-// IncHits увеличивает счетчик успешных чтений.
-func (m *Metrics) IncHits() {
-	if m == nil {
-		return
-	}
-
-	m.hits.Inc()
-}
-
-// IncMisses увеличивает счетчик неуспешных чтений.
-func (m *Metrics) IncMisses() {
-	if m == nil {
-		return
-	}
-
-	m.misses.Inc()
-}
-
-// AddExpiredDeletions увеличивает счетчик удалений по TTL на n.
 func (m *Metrics) AddExpiredDeletions(n int) {
-	if m == nil || n <= 0 {
-		return
+	if n > 0 {
+		m.expiredDeletions.Add(float64(n))
 	}
-
-	m.expiredDeletions.Add(float64(n))
 }
 
-// SetObjectsTotal обновляет текущее количество живых объектов.
-func (m *Metrics) SetObjectsTotal(n int) {
-	if m == nil {
-		return
-	}
+func (m *Metrics) SetObjectsTotal(n int) { m.objectsTotal.Set(float64(n)) }
 
-	m.objectsTotal.Set(float64(n))
-}
-
-// ObserveSnapshotDuration записывает длительность сохранения snapshot.
 func (m *Metrics) ObserveSnapshotDuration(seconds float64) {
-	if m == nil {
-		return
-	}
-
 	m.snapshotDuration.Observe(seconds)
 }
 
-// SetSnapshotSizeBytes обновляет размер последнего snapshot.
 func (m *Metrics) SetSnapshotSizeBytes(n int) {
-	if m == nil || n < 0 {
-		return
+	if n >= 0 {
+		m.snapshotSizeBytes.Set(float64(n))
 	}
-
-	m.snapshotSizeBytes.Set(float64(n))
 }

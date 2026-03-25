@@ -116,12 +116,12 @@ storage_put_requests_total 2
 
 ## Архитектура
 
-- `internal/storage` - core-логика хранения, TTL, snapshot/restore.
-- `internal/persistence` - работа со snapshot-файлом на диске.
+- `internal/storage` - интерфейс Store и доменные ошибки.
+- `internal/storage/memory` - in-memory реализация: хранилище, eviction worker, snapshot/restore.
+- `internal/config` - парсинг и валидация конфигурации из env-переменных.
 - `internal/httpapi` - HTTP handlers, middleware, роутинг и встроенная документация.
 - `internal/observability` - логирование и прикладные метрики.
-- `internal/app` - сборка зависимостей, запуск воркеров и graceful shutdown.
-
+- `internal/app` - сборка зависимостей, readiness probes, запуск воркеров и graceful shutdown.
 ## Запуск
 
 ### Локально

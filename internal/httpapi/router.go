@@ -1,18 +1,13 @@
 package httpapi
 
-import (
-	"net/http"
-)
+import "net/http"
 
-// RouterDependencies описывает все зависимости, нужные для сборки router.
-// Это удобно, чтобы не передавать 6-7 аргументов в NewRouter по отдельности.
 type RouterDependencies struct {
 	Objects *ObjectsHandler
 	Probes  *ProbesHandler
 	Metrics http.Handler
 }
 
-// NewRouter собирает все HTTP маршруты сервиса.
 func NewRouter(deps RouterDependencies) http.Handler {
 	mux := http.NewServeMux()
 
@@ -37,8 +32,8 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	if deps.Metrics != nil {
 		mux.Handle("/metrics", deps.Metrics)
 	}
+
 	mux.HandleFunc("/docs", DocsHandler)
-	mux.HandleFunc("/docs/openapi.yaml", OpenAPISpecHandler)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "route not found")

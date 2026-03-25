@@ -31,9 +31,11 @@ paths:
         - name: key
           in: path
           required: true
-          description: Object key
+          description: Object key (alphanumeric start, then alphanumeric/._:@- allowed, max 256)
           schema:
             type: string
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:@\-]*$'
+            maxLength: 256
         - name: Expires
           in: header
           required: false
@@ -47,9 +49,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: true
+            schema: {}
             examples:
               sample:
                 value:
@@ -89,17 +89,17 @@ paths:
         - name: key
           in: path
           required: true
-          description: Object key
+          description: Object key (alphanumeric start, then alphanumeric/._:@- allowed, max 256)
           schema:
             type: string
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:@\-]*$'
+            maxLength: 256
       responses:
         '200':
           description: Object found
           content:
             application/json:
-              schema:
-                type: object
-                additionalProperties: true
+              schema: {}
               examples:
                 sample:
                   value:

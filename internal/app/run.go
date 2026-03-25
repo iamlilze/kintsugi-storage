@@ -5,87 +5,81 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
-// Run запускает фоновые компоненты приложения и HTTP-сервер.
 func (a *App) Run(ctx context.Context) error {
 	a.logger.Info("application starting", "addr", a.cfg.HTTPAddr)
 
-	serverErrCh := make(chan error, 1)
-	workerErrCh := make(chan error, 1)
-	snapshotErrCh := make(chan error, 1)
-
-	go func() {
-		a.logger.Info("http server started", "addr", a.cfg.HTTPAddr)
-		err := a.server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErrCh <- fmt.Errorf("http server: %w", err)
-			return
-		}
-
-		serverErrCh <- nil
-	}()
-
-	go func() {
-		err := a.ttlWorker.Run(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			workerErrCh <- fmt.Errorf("ttl worker: %w", err)
-			return
-		}
-
-		workerErrCh <- nil
-	}()
-
-	go func() {
-		err := a.runSnapshotWorker(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			snapshotErrCh <- fmt.Errorf("snapshot worker: %w", err)
-			return
-		}
-
-		snapshotErrCh <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		a.logger.Info("shutdown signal received", "reason", ctx.Err())
-	case err := <-serverErrCh:
-		if err != nil {
-			return err
-		}
-	case err := <-workerErrCh:
-		if err != nil {
-			return err
-		}
-	case err := <-snapshotErrCh:
-		if err != nil {
-			return err
-		}
+	ln, err := net.Listen("tcp", a.cfg.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
 	}
 
-	a.readiness.SetReady(false)
+	a.readiness.Start()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if err := a.server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown http server: %w", err)
+	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		a.logger.Info("http server started", "addr", a.cfg.HTTPAddr)
+		err := a.server.Serve(ln)
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	})
+
+	g.Go(func() error {
+		<-gCtx.Done()
+		a.readiness.Stop()
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
+		defer shutdownCancel()
+		return a.server.Shutdown(shutdownCtx)
+	})
+
+	if a.eviction != nil {
+		g.Go(func() error {
+			return a.eviction.Run(gCtx)
+		})
 	}
 
-	if err := a.saveSnapshot(); err != nil {
-		return err
+	if a.snapshotter != nil && a.memStore != nil {
+		g.Go(func() error {
+			return a.runSnapshotWorker(gCtx)
+		})
+	}
+
+	err = g.Wait()
+
+	if a.memStore != nil && a.snapshotter != nil {
+		if saveErr := a.saveSnapshot(); saveErr != nil {
+			a.logger.Error("final snapshot failed", "error", saveErr)
+			if err == nil {
+				err = saveErr
+			}
+		}
+	}
+
+	if closeErr := a.store.Close(); closeErr != nil {
+		a.logger.Error("store close failed", "error", closeErr)
 	}
 
 	a.logger.Info("application stopped")
-	return nil
+	return err
 }
 
 func (a *App) runSnapshotWorker(ctx context.Context) error {
 	if a.cfg.SnapshotInterval <= 0 {
 		<-ctx.Done()
-		return ctx.Err()
+		return nil
 	}
 
 	ticker := time.NewTicker(a.cfg.SnapshotInterval)
@@ -96,8 +90,8 @@ func (a *App) runSnapshotWorker(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			a.logger.Info("snapshot worker stopped", "reason", ctx.Err())
-			return ctx.Err()
+			a.logger.Info("snapshot worker stopped")
+			return nil
 		case <-ticker.C:
 			if err := a.saveSnapshot(); err != nil {
 				return err
@@ -106,14 +100,13 @@ func (a *App) runSnapshotWorker(ctx context.Context) error {
 	}
 }
 
-// saveSnapshot собирает и сохраняет текущее состояние store на диск.
 func (a *App) saveSnapshot() error {
 	start := time.Now()
 
-	snapshot := a.store.Snapshot(start)
+	snapshot := a.memStore.Snapshot()
 	data, err := json.Marshal(snapshot)
 	if err != nil {
-		return fmt.Errorf("marshal snapshot for metrics: %w", err)
+		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 	if err := a.snapshotter.Save(snapshot); err != nil {
 		return fmt.Errorf("save snapshot: %w", err)
@@ -122,16 +115,15 @@ func (a *App) saveSnapshot() error {
 	duration := time.Since(start)
 
 	a.metrics.ObserveSnapshotDuration(duration.Seconds())
-	a.metrics.SetObjectsTotal(a.store.Len(timeNow()))
+	n, _ := a.store.Len(context.Background())
+	a.metrics.SetObjectsTotal(n)
 	a.metrics.SetSnapshotSizeBytes(len(data))
 
-	a.logger.Info(
-		"snapshot saved",
+	a.logger.Info("snapshot saved",
 		"path", a.cfg.SnapshotPath,
 		"objects_count", len(snapshot.Items),
 		"size_bytes", len(data),
 		"duration", duration,
 	)
-
 	return nil
 }

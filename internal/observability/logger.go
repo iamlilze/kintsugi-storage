@@ -7,30 +7,35 @@ import (
 	"strings"
 )
 
-// LoggerConfig описывает только то, что реально нужно логгеру.
 type LoggerConfig struct {
 	Level  string
 	Format string
 }
 
-// NewLogger создает и настраивает общий logger приложения.
 func NewLogger(cfg LoggerConfig) *slog.Logger {
+	return buildLogger(cfg, os.Stdout)
+}
+
+// Сейчас оба пишут в stdout, но разделение позволяет
+// в будущем направить access log в отдельный поток.
+func NewAccessLogger(cfg LoggerConfig) *slog.Logger {
+	return buildLogger(cfg, os.Stdout).With("logger", "access")
+}
+
+func buildLogger(cfg LoggerConfig, w io.Writer) *slog.Logger {
 	level := parseLogLevel(cfg.Level)
 	format := strings.ToLower(strings.TrimSpace(cfg.Format))
 
 	var handler slog.Handler
-
 	switch format {
 	case "json":
-		handler = newJSONHandler(os.Stdout, level)
+		handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
 	default:
-		handler = newTextHandler(os.Stdout, level)
+		handler = slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
 	}
-
 	return slog.New(handler)
 }
 
-// parseLogLevel переводит строку из конфига в slog.Level.
 func parseLogLevel(raw string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "debug":
@@ -42,18 +47,4 @@ func parseLogLevel(raw string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
-}
-
-// newTextHandler создает текстовый handler для локальной разработки.
-func newTextHandler(w io.Writer, level slog.Level) slog.Handler {
-	return slog.NewTextHandler(w, &slog.HandlerOptions{
-		Level: level,
-	})
-}
-
-// newJSONHandler создает JSON handler для контейнерной среды.
-func newJSONHandler(w io.Writer, level slog.Level) slog.Handler {
-	return slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level: level,
-	})
 }

@@ -7,6 +7,8 @@ linters:
     - errcheck
     - errorlint
     - gocritic
+    - gofmt
+    - goimports
     - gosimple
     - govet
     - ineffassign
@@ -14,6 +16,8 @@ linters:
     - nakedret
     - revive
     - staticcheck
+    - unconvert
+    - unparam
     - unused
 
 linters-settings:
